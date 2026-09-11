@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { z } from "zod";
+import { dispatchWebhookEvent } from "@/lib/webhooks/dispatch";
 
 const customerSchema = z.object({
   name: z.string().min(1, "Name is required").max(120),
@@ -39,7 +40,7 @@ export async function createCustomer(
   }
 
   const d = parsed.data;
-  await prisma.customer.create({
+  const customer = await prisma.customer.create({
     data: {
       userId: user.id,
       name: d.name,
@@ -52,6 +53,7 @@ export async function createCustomer(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "customer.created", customer);
   revalidatePath("/customers");
   redirect("/customers");
 }
@@ -97,6 +99,7 @@ export async function updateCustomer(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "customer.updated", { id, ...d });
   revalidatePath("/customers");
   redirect("/customers");
 }
@@ -109,6 +112,7 @@ export async function deleteCustomer(id: string): Promise<{ error?: string }> {
   if (!existing) return { error: "Customer not found" };
 
   await prisma.customer.delete({ where: { id } });
+  await dispatchWebhookEvent(user.id, "customer.deleted", { id });
   revalidatePath("/customers");
   return {};
 }

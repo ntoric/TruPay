@@ -58,6 +58,21 @@ export async function POST(request: Request) {
       notes: { invoiceId, invoiceNumber: invoice.invoiceNumber },
     });
 
+    // Store a PENDING payment placeholder so this order is trackable for
+    // asynchronous reconciliation if the webhook is missed.
+    await prisma.payment.create({
+      data: {
+        userId: user.id,
+        invoiceId: invoice.id,
+        amount: due,
+        method: "ONLINE",
+        status: "PENDING",
+        gateway: "cashfree",
+        cashfreeOrderId: order.order_id,
+        notes: "Cashfree order created (awaiting payment)",
+      },
+    });
+
     return jsonResponse({
       orderId: order.order_id,
       cfOrderId: order.cf_order_id,

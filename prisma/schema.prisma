@@ -37,6 +37,8 @@ model User {
   rules         NotificationRule[] @relation(name: "rules")
   logs          NotificationLog[]  @relation(name: "logs")
   settings      Settings?      @relation(name: "settings")
+  apiKeys       ApiKey[]       @relation(name: "apiKeys")
+  webhookEndpoints WebhookEndpoint[] @relation(name: "webhookEndpoints")
 }
 
 model Account {
@@ -416,4 +418,69 @@ model Settings {
   updatedAt          DateTime @updatedAt
 
   user User @relation(name: "settings", fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// API Keys (for the public REST API consumed by external systems)
+// ---------------------------------------------------------------------------
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String    // human-readable label
+  keyHash    String    @unique // sha256 hash of the full secret key
+  prefix     String    // first 8 chars stored for display/lookup
+  lastUsedAt DateTime?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  user User @relation(name: "apiKeys", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Outbound Webhooks (push events to external systems)
+// ---------------------------------------------------------------------------
+
+model WebhookEndpoint {
+  id        String   @id @default(cuid())
+  userId    String
+  url       String
+  events    String[] @default([]) // subscribed event names; empty = all events
+  secret    String   // signing secret sent via X-SubHub-Signature (HMAC-SHA256)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User              @relation(name: "webhookEndpoints", fields: [userId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([userId])
+}
+
+enum WebhookDeliveryStatus {
+  SUCCESS
+  FAILED
+  PENDING
+}
+
+model WebhookDelivery {
+  id           String               @id @default(cuid())
+  endpointId   String
+  event        String
+  payload      Json
+  statusCode   Int?
+  responseBody String?
+  attempt      Int                  @default(1)
+  status       WebhookDeliveryStatus @default(PENDING)
+  error        String?
+  createdAt    DateTime             @default(now())
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId])
+  @@index([status])
+  @@index([createdAt])
 }

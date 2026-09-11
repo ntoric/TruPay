@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { addDays, generateInvoiceNumber } from "@/lib/utils";
 import { getCashfreeConfig } from "@/lib/payments/cashfree-config";
 import { createOrder, buildCheckoutUrl } from "@/lib/payments/cashfree";
+import { dispatchWebhookEvent } from "@/lib/webhooks/dispatch";
 
 /**
  * Maintenance job run by the cron endpoint:
@@ -70,6 +71,24 @@ export async function runMaintenance(): Promise<{
       },
     });
 
+    // Outbound webhooks for the auto-renewal
+    await dispatchWebhookEvent(sub.userId, "subscription.renewed", {
+      id: sub.id,
+      startDate: newStart,
+      endDate: newEnd,
+      status: "ACTIVE",
+      autoRenew: true,
+    });
+    await dispatchWebhookEvent(sub.userId, "invoice.created", {
+      id: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      subscriptionId: sub.id,
+      customerId: sub.customerId,
+      status: invoice.status,
+      total: Number(invoice.total),
+      currency: invoice.currency,
+    });
+
     // If Cashfree is enabled, create a payment order and send a payment link
     const cfg = await getCashfreeConfig(sub.userId);
     if (cfg && sub.customer.email) {
@@ -128,6 +147,14 @@ export async function runMaintenance(): Promise<{
   }
 
   // 2. Mark expired subscriptions (not auto-renew, endDate passed)
+  const expiring = await prisma.subscription.findMany({
+    where: {
+      endDate: { lt: now },
+      status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
+      autoRenew: false,
+    },
+    select: { id: true, userId: true, customerId: true, endDate: true },
+  });
   const expiredResult = await prisma.subscription.updateMany({
     where: {
       endDate: { lt: now },
@@ -136,6 +163,22 @@ export async function runMaintenance(): Promise<{
     },
     data: { status: "EXPIRED" },
   });
+  // Emit subscription.expired for each (grouped by user to minimize queries)
+  const expiredByUser = new Map<string, typeof expiring>();
+  for (const s of expiring) {
+    if (!expiredByUser.has(s.userId)) expiredByUser.set(s.userId, []);
+    expiredByUser.get(s.userId)!.push(s);
+  }
+  for (const [userId, subs] of expiredByUser) {
+    for (const s of subs) {
+      await dispatchWebhookEvent(userId, "subscription.expired", {
+        id: s.id,
+        customerId: s.customerId,
+        endDate: s.endDate,
+        status: "EXPIRED",
+      });
+    }
+  }
 
   // 3. Mark overdue invoices
   const overdueResult = await prisma.invoice.updateMany({

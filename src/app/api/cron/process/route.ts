@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { processScheduledNotifications } from "@/lib/notifications/scheduler";
 import { runMaintenance } from "@/lib/notifications/maintenance";
+import { reconcileCashfreePayments } from "@/lib/payments/reconcile";
 
 export const dynamic = "force-dynamic";
 
@@ -18,10 +19,16 @@ export async function GET(request: Request) {
   }
 
   try {
+    // Reconcile pending Cashfree payments FIRST, so that maintenance (which
+    // marks invoices overdue) and notification scheduling operate on
+    // up-to-date payment state. This catches payments whose webhooks were
+    // missed because the system was unreachable.
+    const reconciliation = await reconcileCashfreePayments();
     const maintenance = await runMaintenance();
     const notifications = await processScheduledNotifications();
     return NextResponse.json({
       ok: true,
+      reconciliation,
       maintenance,
       notifications,
     });

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { z } from "zod";
 import type { BillingCycle } from "@prisma/client";
+import { dispatchWebhookEvent } from "@/lib/webhooks/dispatch";
 
 const DURATIONS: Record<string, number> = {
   WEEKLY: 7,
@@ -59,7 +60,7 @@ export async function createPlan(
     ? d.features.split("\n").map((f) => f.trim()).filter(Boolean)
     : undefined;
 
-  await prisma.plan.create({
+  const plan = await prisma.plan.create({
     data: {
       userId: user.id,
       name: d.name,
@@ -73,6 +74,7 @@ export async function createPlan(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "plan.created", { ...plan, price: Number(plan.price) });
   revalidatePath("/plans");
   redirect("/plans");
 }
@@ -113,6 +115,7 @@ export async function updatePlan(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "plan.updated", { id, ...d, durationDays: duration });
   revalidatePath("/plans");
   redirect("/plans");
 }
@@ -129,6 +132,7 @@ export async function deletePlan(id: string): Promise<{ error?: string }> {
   }
 
   await prisma.plan.delete({ where: { id } });
+  await dispatchWebhookEvent(user.id, "plan.deleted", { id });
   revalidatePath("/plans");
   return {};
 }

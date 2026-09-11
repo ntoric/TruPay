@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/session";
 import { z } from "zod";
 import type { SubscriptionStatus } from "@prisma/client";
 import { addDays, generateInvoiceNumber } from "@/lib/utils";
+import { dispatchWebhookEvent } from "@/lib/webhooks/dispatch";
 
 const subSchema = z.object({
   customerId: z.string().min(1, "Select a customer"),
@@ -92,7 +93,7 @@ export async function createSubscription(
     const taxRate = 0;
     const taxAmount = 0;
     const total = subtotal + taxAmount;
-    await prisma.invoice.create({
+    const invoice = await prisma.invoice.create({
       data: {
         userId: user.id,
         customerId: customer.id,
@@ -119,8 +120,20 @@ export async function createSubscription(
         },
       },
     });
+    await dispatchWebhookEvent(user.id, "invoice.created", {
+      id: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      subscriptionId: subscription.id,
+      customerId: customer.id,
+      total: Number(invoice.total),
+      status: invoice.status,
+    });
   }
 
+  await dispatchWebhookEvent(user.id, "subscription.created", {
+    ...subscription,
+    price: Number(subscription.price),
+  });
   revalidatePath("/subscriptions");
   redirect("/subscriptions");
 }
@@ -191,6 +204,17 @@ export async function updateSubscription(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "subscription.updated", {
+    id,
+    customerId: customer.id,
+    planId: plan.id,
+    productId,
+    status: d.status,
+    startDate,
+    endDate,
+    autoRenew: d.autoRenew === "on",
+    price,
+  });
   revalidatePath("/subscriptions");
   redirect("/subscriptions");
 }
@@ -203,6 +227,7 @@ export async function deleteSubscription(id: string): Promise<{ error?: string }
   if (!existing) return { error: "Subscription not found" };
 
   await prisma.subscription.delete({ where: { id } });
+  await dispatchWebhookEvent(user.id, "subscription.deleted", { id });
   revalidatePath("/subscriptions");
   return {};
 }
@@ -228,6 +253,12 @@ export async function renewSubscription(id: string): Promise<{ error?: string }>
     },
   });
 
+  await dispatchWebhookEvent(user.id, "subscription.renewed", {
+    id,
+    startDate: newStart,
+    endDate: newEnd,
+    status: "ACTIVE",
+  });
   revalidatePath("/subscriptions");
   return {};
 }

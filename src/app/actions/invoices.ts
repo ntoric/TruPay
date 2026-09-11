@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { InvoiceStatus, PaymentMethod, PaymentStatus } from "@prisma/client";
 import { addDays, generateInvoiceNumber } from "@/lib/utils";
 import { dispatchNotification } from "@/lib/notifications/dispatch";
+import { dispatchWebhookEvent } from "@/lib/webhooks/dispatch";
 
 // ---- Create / Update ----
 
@@ -100,6 +101,15 @@ export async function createInvoice(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "invoice.created", {
+    id: invoice.id,
+    invoiceNumber: invoice.invoiceNumber,
+    customerId: customer.id,
+    subscriptionId: invoice.subscriptionId,
+    status: invoice.status,
+    total: Number(invoice.total),
+    currency: invoice.currency,
+  });
   revalidatePath("/invoices");
   redirect(`/invoices/${invoice.id}`);
 }
@@ -171,6 +181,12 @@ export async function updateInvoice(
     })),
   });
 
+  await dispatchWebhookEvent(user.id, "invoice.updated", {
+    id,
+    customerId: customer.id,
+    status: d.status,
+    total,
+  });
   revalidatePath("/invoices");
   redirect(`/invoices/${id}`);
 }
@@ -180,6 +196,7 @@ export async function deleteInvoice(id: string): Promise<{ error?: string }> {
   const existing = await prisma.invoice.findFirst({ where: { id, userId: user.id } });
   if (!existing) return { error: "Invoice not found" };
   await prisma.invoice.delete({ where: { id } });
+  await dispatchWebhookEvent(user.id, "invoice.deleted", { id });
   revalidatePath("/invoices");
   return {};
 }
@@ -205,7 +222,7 @@ export async function recordPayment(
 
   if (isNaN(amount) || amount <= 0) return { error: "Enter a valid amount" };
 
-  await prisma.payment.create({
+  const payment = await prisma.payment.create({
     data: {
       userId: user.id,
       invoiceId: id,
@@ -226,8 +243,24 @@ export async function recordPayment(
     totalPaid >= Number(invoice.total) ? "PAID" : "PARTIAL";
   await prisma.invoice.update({ where: { id }, data: { status: newStatus } });
 
-  // If fully paid, fire INVOICE_PAID event-driven notifications
+  // Outbound webhook: payment recorded
+  await dispatchWebhookEvent(user.id, "payment.recorded", {
+    id: payment.id,
+    invoiceId: id,
+    amount: Number(payment.amount),
+    method: payment.method,
+    status: payment.status,
+    invoiceStatus: newStatus,
+  });
+
+  // If fully paid, fire INVOICE_PAID event-driven notifications + webhook
   if (newStatus === "PAID") {
+    await dispatchWebhookEvent(user.id, "invoice.paid", {
+      id,
+      invoiceNumber: invoice.invoiceNumber,
+      total: Number(invoice.total),
+      totalPaid,
+    });
     const rules = await prisma.notificationRule.findMany({
       where: { userId: user.id, triggerType: "INVOICE_PAID", isActive: true },
     });
@@ -283,6 +316,12 @@ export async function sendInvoiceEmail(id: string): Promise<{ error?: string; se
     await prisma.invoice.update({ where: { id }, data: { status: "SENT" } });
   }
 
+  await dispatchWebhookEvent(user.id, "invoice.sent", {
+    id,
+    invoiceNumber: invoice.invoiceNumber,
+    customerId: invoice.customerId,
+    sentTo: invoice.customer.email ?? null,
+  });
   revalidatePath(`/invoices/${id}`);
   return { sent: true };
 }

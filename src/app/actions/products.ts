@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { z } from "zod";
+import { dispatchWebhookEvent } from "@/lib/webhooks/dispatch";
 
 const productSchema = z.object({
   name: z.string().min(1, "Name is required").max(120),
@@ -35,7 +36,7 @@ export async function createProduct(
   const d = parsed.data;
   const price = parseFloat(d.price || "0") || 0;
 
-  await prisma.product.create({
+  const product = await prisma.product.create({
     data: {
       userId: user.id,
       name: d.name,
@@ -47,6 +48,7 @@ export async function createProduct(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "product.created", { ...product, price: Number(product.price) });
   revalidatePath("/products");
   redirect("/products");
 }
@@ -85,6 +87,7 @@ export async function updateProduct(
     },
   });
 
+  await dispatchWebhookEvent(user.id, "product.updated", { id, ...d, price });
   revalidatePath("/products");
   redirect("/products");
 }
@@ -94,6 +97,7 @@ export async function deleteProduct(id: string): Promise<{ error?: string }> {
   const existing = await prisma.product.findFirst({ where: { id, userId: user.id } });
   if (!existing) return { error: "Product not found" };
   await prisma.product.delete({ where: { id } });
+  await dispatchWebhookEvent(user.id, "product.deleted", { id });
   revalidatePath("/products");
   return {};
 }

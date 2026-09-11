@@ -11,6 +11,7 @@ export async function proxy(request: NextRequest) {
     publicPaths.some((p) => pathname.startsWith(p)) ||
     pathname.startsWith("/api/telegram") || // telegram webhook is authed by token
     pathname.startsWith("/api/mobile") || // mobile API uses Bearer JWT auth
+    pathname.startsWith("/api/v1") || // public REST API uses Bearer API-key auth
     pathname.startsWith("/api/payments/cashfree/webhook") || // Cashfree webhook uses signature verification
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon.ico") ||
