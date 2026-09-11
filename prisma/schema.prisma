@@ -1,0 +1,419 @@
+// Prisma schema for Subscription & Membership Manager
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth / Users
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  name          String?
+  email         String   @unique
+  password      String?
+  image         String?
+  role          String   @default("USER") // USER | ADMIN
+  emailVerified DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accounts      Account[]      @relation(name: "accounts")
+  sessions      Session[]      @relation(name: "sessions")
+
+  customers     Customer[]     @relation(name: "customers")
+  plans         Plan[]         @relation(name: "plans")
+  products      Product[]      @relation(name: "products")
+  subscriptions Subscription[] @relation(name: "subscriptions")
+  invoices      Invoice[]      @relation(name: "invoices")
+  payments      Payment[]      @relation(name: "payments")
+  rules         NotificationRule[] @relation(name: "rules")
+  logs          NotificationLog[]  @relation(name: "logs")
+  settings      Settings?      @relation(name: "settings")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(name: "accounts", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(name: "sessions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id             String   @id @default(cuid())
+  userId         String
+  name           String
+  email          String?
+  phone          String?
+  telegramChatId String?
+  company        String?
+  address        String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user          User           @relation(name: "customers", fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+  invoices      Invoice[]
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Plans (predefined + custom)
+// ---------------------------------------------------------------------------
+
+enum BillingCycle {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  CUSTOM
+}
+
+model Plan {
+  id           String       @id @default(cuid())
+  userId       String
+  name         String
+  description  String?
+  price        Decimal      @db.Decimal(12, 2)
+  billingCycle BillingCycle
+  durationDays Int          // billing period length in days
+  features     Json?
+  isCustom     Boolean      @default(false)
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  user          User           @relation(name: "plans", fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Products
+// ---------------------------------------------------------------------------
+
+model Product {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  sku         String?
+  category    String?
+  price       Decimal  @db.Decimal(12, 2) @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user          User           @relation(name: "products", fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Subscriptions / Memberships
+// ---------------------------------------------------------------------------
+
+enum SubscriptionStatus {
+  ACTIVE
+  PENDING
+  EXPIRED
+  CANCELLED
+  PAST_DUE
+  TRIALING
+}
+
+model Subscription {
+  id         String             @id @default(cuid())
+  userId     String
+  customerId String
+  planId     String
+  productId  String?
+  status     SubscriptionStatus @default(ACTIVE)
+  startDate  DateTime
+  endDate    DateTime
+  autoRenew  Boolean            @default(false)
+  price      Decimal            @db.Decimal(12, 2)
+  notes      String?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  user     User      @relation(name: "subscriptions", fields: [userId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  plan     Plan      @relation(fields: [planId], references: [id])
+  product  Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  invoices Invoice[]
+
+  @@index([userId])
+  @@index([customerId])
+  @@index([productId])
+  @@index([status])
+  @@index([endDate])
+}
+
+// ---------------------------------------------------------------------------
+// Invoicing
+// ---------------------------------------------------------------------------
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  PARTIAL
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id            String       @id @default(cuid())
+  userId        String
+  customerId    String
+  subscriptionId String?
+  invoiceNumber String       @unique
+  issueDate     DateTime     @default(now())
+  dueDate       DateTime
+  status        InvoiceStatus @default(DRAFT)
+  subtotal      Decimal      @db.Decimal(12, 2)
+  taxRate       Decimal      @db.Decimal(5, 2) @default(0)
+  taxAmount     Decimal      @db.Decimal(12, 2) @default(0)
+  discount      Decimal      @db.Decimal(12, 2) @default(0)
+  total         Decimal      @db.Decimal(12, 2)
+  currency      String       @default("INR")
+  notes         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  user     User           @relation(name: "invoices", fields: [userId], references: [id], onDelete: Cascade)
+  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  items    InvoiceItem[]
+  payments Payment[]
+
+  @@index([userId])
+  @@index([customerId])
+  @@index([status])
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  description String
+  quantity    Decimal @db.Decimal(10, 2) @default(1)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  total       Decimal @db.Decimal(12, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  ONLINE
+  CHEQUE
+  OTHER
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  userId        String
+  invoiceId     String
+  amount        Decimal       @db.Decimal(12, 2)
+  method        PaymentMethod @default(OTHER)
+  status        PaymentStatus @default(COMPLETED)
+  transactionId String?
+  paidAt        DateTime      @default(now())
+  notes         String?
+  createdAt     DateTime      @default(now())
+  // Cashfree gateway fields
+  cashfreeOrderId   String?
+  cashfreePaymentId String?
+  gateway           String   @default("manual") // manual | cashfree
+
+  user    User    @relation(name: "payments", fields: [userId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([invoiceId])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications / Alerts / Reminders
+// ---------------------------------------------------------------------------
+
+enum RuleType {
+  REMINDER
+  ALERT
+  NOTIFICATION
+}
+
+enum TriggerType {
+  BEFORE_RENEWAL
+  ON_RENEWAL
+  AFTER_RENEWAL
+  PAYMENT_DUE
+  PAYMENT_OVERDUE
+  SUBSCRIPTION_EXPIRED
+  INVOICE_CREATED
+  INVOICE_PAID
+  CUSTOM
+}
+
+model NotificationRule {
+  id              String      @id @default(cuid())
+  userId          String
+  name            String
+  type            RuleType
+  triggerType     TriggerType
+  daysOffset      Int         @default(0) // days before/after the trigger event
+  channels        String[]    @default([]) // EMAIL, SMS, TELEGRAM
+  subjectTemplate String?
+  messageTemplate String
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  user User              @relation(name: "rules", fields: [userId], references: [id], onDelete: Cascade)
+  logs NotificationLog[]
+
+  @@index([userId])
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  TELEGRAM
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+model NotificationLog {
+  id             String             @id @default(cuid())
+  userId         String
+  ruleId         String?
+  customerId     String?
+  subscriptionId String?
+  invoiceId      String?
+  channel        NotificationChannel
+  status         NotificationStatus
+  recipient      String?
+  subject        String?
+  message        String
+  error          String?
+  sentAt         DateTime?
+  createdAt      DateTime           @default(now())
+
+  user User             @relation(name: "logs", fields: [userId], references: [id], onDelete: Cascade)
+  rule NotificationRule? @relation(fields: [ruleId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Per-user settings (SMTP / SMS / Telegram / preferences)
+// ---------------------------------------------------------------------------
+
+model Settings {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  // SMTP
+  smtpHost           String?
+  smtpPort           Int?
+  smtpUser           String?
+  smtpPass           String?
+  smtpFrom           String?
+  smtpSecure         Boolean  @default(true)
+  // SMS
+  smsProvider        String   @default("none") // none | twilio | vonage
+  twilioAccountSid   String?
+  twilioAuthToken    String?
+  twilioFromNumber   String?
+  vonageApiKey       String?
+  vonageApiSecret    String?
+  vonageFromNumber   String?
+  // Telegram
+  telegramBotToken   String?
+  telegramBotUsername String?
+  // Cashfree Payment Gateway
+  cashfreeEnabled    Boolean  @default(false)
+  cashfreeAppId       String?
+  cashfreeSecretKey   String?
+  cashfreeEnvironment String   @default("sandbox") // sandbox | production
+  cashfreeWebhookSecret String?
+  // General
+  currency           String   @default("INR")
+  timezone           String   @default("UTC")
+  companyName        String?
+  companyAddress     String?
+  companyEmail       String?
+  companyPhone       String?
+  // Master toggles
+  emailEnabled       Boolean  @default(true)
+  smsEnabled         Boolean  @default(false)
+  telegramEnabled    Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(name: "settings", fields: [userId], references: [id], onDelete: Cascade)
+}
